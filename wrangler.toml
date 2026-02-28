@@ -7,10 +7,9 @@ workers_dev = true
 STYTCH_API_BASE = "https://test.stytch.com"
 DEFAULT_RETURN_TO = "https://flows-alpha.sinhasumit.com/auth/callback"
 
-[[durable_objects.bindings]]
-name = "RATE_LIMITER"
-class_name = "RateLimiter"
+[durable_objects]
+bindings = [{ name = "RATE_LIMITER", class_name = "RateLimiter" }]
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["RateLimiter"]
+new_classes = ["RateLimiter"]
