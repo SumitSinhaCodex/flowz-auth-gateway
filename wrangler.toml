@@ -1,0 +1,16 @@
+name = "flowz-auth-gateway"
+main = "src/index.js"
+compatibility_date = "2026-02-28"
+workers_dev = true
+
+[vars]
+STYTCH_API_BASE = "https://test.stytch.com"
+DEFAULT_RETURN_TO = "https://flows-alpha.sinhasumit.com/auth/callback"
+
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RateLimiter"]
