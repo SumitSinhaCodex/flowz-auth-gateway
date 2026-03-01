@@ -6,6 +6,9 @@ workers_dev = true
 [vars]
 STYTCH_API_BASE = "https://test.stytch.com"
 DEFAULT_RETURN_TO = "https://flows-alpha.sinhasumit.com/auth/callback"
+ALLOWED_ORIGINS = "http://localhost:5173,https://flows-alpha.sinhasumit.com"
+STYTCH_AUTH_DOMAIN = "flowzlogin-test.sinhasumit.com"
+STYTCH_PUBLIC_TOKEN = "public-token-test-60357f65-0934-4660-bb87-ff87db7b12d7"
 
 [durable_objects]
 bindings = [{ name = "RATE_LIMITER", class_name = "RateLimiter" }]
