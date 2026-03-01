@@ -140,8 +140,8 @@ export function buildStytchAuthenticateRequest(sessionToken, env) {
     init: {
       method: 'POST',
       headers: {
-        authorization,
-        'content-type': 'application/json',
+        Authorization: authorization,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({ session_token: sessionToken }),
     },
@@ -166,8 +166,8 @@ export function buildStytchPasswordAuthenticateRequest(email, password, env) {
     init: {
       method: 'POST',
       headers: {
-        authorization,
-        'content-type': 'application/json',
+        Authorization: authorization,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         email,

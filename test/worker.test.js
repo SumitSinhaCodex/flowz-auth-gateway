@@ -88,9 +88,9 @@ test('authenticate request formation uses Stytch sessions/authenticate with basi
 
   assert.equal(capturedUrl, 'https://test.stytch.com/v1/sessions/authenticate');
   assert.equal(capturedInit.method, 'POST');
-  assert.equal(capturedInit.headers['content-type'], 'application/json');
+  assert.equal(capturedInit.headers['Content-Type'], 'application/json');
   assert.equal(
-    capturedInit.headers.authorization,
+    capturedInit.headers.Authorization,
     `Basic ${Buffer.from('project-test-123:secret-test-abc').toString('base64')}`,
   );
   assert.deepEqual(JSON.parse(capturedInit.body), { session_token: 'session-token-input' });
@@ -167,7 +167,7 @@ test('POST /auth/email_password success returns 302 with return_to + token param
   globalThis.fetch = async (url, init) => {
     assert.equal(url, 'https://test.stytch.com/v1/passwords/authenticate');
     assert.equal(init.method, 'POST');
-    assert.equal(init.headers['content-type'], 'application/json');
+    assert.equal(init.headers['Content-Type'], 'application/json');
     return new Response(
       JSON.stringify({
         session_token: 'stytch-session-abc',
