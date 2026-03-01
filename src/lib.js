@@ -132,13 +132,15 @@ export function buildStytchAuthenticateRequest(sessionToken, env) {
   const apiBase = (env.STYTCH_API_BASE || DEFAULT_STYTCH_API_BASE).replace(/\/$/, '');
   const credentials = `${projectId}:${secret}`;
   const encodedCredentials = toBase64(credentials);
+  const authorization = `Basic ${encodedCredentials}`;
+  console.log({ auth_header_prefix: authorization.split(' ')[0] });
 
   return {
     url: `${apiBase}/v1/sessions/authenticate`,
     init: {
       method: 'POST',
       headers: {
-        authorization: `Basic ${encodedCredentials}`,
+        authorization,
         'content-type': 'application/json',
       },
       body: JSON.stringify({ session_token: sessionToken }),
@@ -156,13 +158,15 @@ export function buildStytchPasswordAuthenticateRequest(email, password, env) {
   const apiBase = (env.STYTCH_API_BASE || DEFAULT_STYTCH_API_BASE).replace(/\/$/, '');
   const credentials = `${projectId}:${secret}`;
   const encodedCredentials = toBase64(credentials);
+  const authorization = `Basic ${encodedCredentials}`;
+  console.log({ auth_header_prefix: authorization.split(' ')[0] });
 
   return {
     url: `${apiBase}/v1/passwords/authenticate`,
     init: {
       method: 'POST',
       headers: {
-        authorization: `Basic ${encodedCredentials}`,
+        authorization,
         'content-type': 'application/json',
       },
       body: JSON.stringify({

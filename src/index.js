@@ -75,6 +75,12 @@ async function handleEmailPasswordAuthenticate(request, env) {
   if (!context.ok) {
     return jsonResponse({ error: context.code, message: context.message }, context.status);
   }
+  if (!env.STYTCH_PROJECT_ID || !env.STYTCH_SECRET) {
+    return new Response(JSON.stringify({ error: 'misconfigured_worker' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  }
 
   let formData;
   try {
@@ -157,6 +163,15 @@ async function handleAuthenticate(request, env) {
   const cors = origin ? buildCorsHeaders(origin, env) : null;
   if (origin && !cors) {
     return jsonResponse({ error: 'origin_not_allowed' }, 403);
+  }
+  if (!env.STYTCH_PROJECT_ID || !env.STYTCH_SECRET) {
+    return new Response(JSON.stringify({ error: 'misconfigured_worker' }), {
+      status: 500,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        ...(cors || {}),
+      },
+    });
   }
 
   const clientIp = request.headers.get('cf-connecting-ip') || 'unknown';
