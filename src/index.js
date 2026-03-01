@@ -1,4 +1,5 @@
 import {
+  authenticateEmailPasswordWithStytch,
   authenticateSessionWithStytch,
   buildCorsHeaders,
   jsonResponse,
@@ -17,6 +18,10 @@ export default {
 
     if (request.method === 'GET' && url.pathname === '/login') {
       return handleLoginPage(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/auth/email_password') {
+      return handleEmailPasswordAuthenticate(request, env);
     }
 
     if (url.pathname === '/auth/stytch/session/authenticate' && request.method === 'OPTIONS') {
@@ -54,7 +59,6 @@ async function handleLoginPage(request, env) {
     appOrigin: context.appOrigin,
     authDomain,
     publicToken,
-    projectId: (env.STYTCH_PROJECT_ID || '').trim(),
   });
 
   return new Response(html, {
@@ -64,6 +68,79 @@ async function handleLoginPage(request, env) {
       'cache-control': 'no-store',
     },
   });
+}
+
+async function handleEmailPasswordAuthenticate(request, env) {
+  const context = resolveLoginContext(request.url, env);
+  if (!context.ok) {
+    return jsonResponse({ error: context.code, message: context.message }, context.status);
+  }
+
+  let formData;
+  try {
+    formData = await request.formData();
+  } catch {
+    return jsonResponse(
+      {
+        error: 'invalid_form',
+        message: 'Request body must be application/x-www-form-urlencoded.',
+      },
+      400,
+    );
+  }
+
+  const email = typeof formData.get('email') === 'string' ? formData.get('email').trim() : '';
+  const password = typeof formData.get('password') === 'string' ? formData.get('password') : '';
+  if (!email || !password) {
+    return jsonResponse(
+      {
+        error: 'missing_email_or_password',
+        message: 'Both email and password are required.',
+      },
+      400,
+    );
+  }
+
+  try {
+    const payload = await authenticateEmailPasswordWithStytch(email, password, env);
+    const sessionToken =
+      payload.session_token ||
+      payload.session?.session_token ||
+      payload.session_jwt ||
+      payload.session?.session_jwt ||
+      '';
+
+    if (!sessionToken) {
+      return jsonResponse(
+        {
+          error: 'stytch_missing_session_token',
+          message: 'Stytch response did not include a session token.',
+        },
+        502,
+      );
+    }
+
+    const redirectUrl = new URL(context.returnTo);
+    redirectUrl.searchParams.set('stytch_token_type', 'password');
+    redirectUrl.searchParams.set('token', sessionToken);
+
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: redirectUrl.toString(),
+        'cache-control': 'no-store',
+      },
+    });
+  } catch (error) {
+    const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 502;
+    return jsonResponse(
+      {
+        error: 'stytch_password_authenticate_failed',
+        message: error.message || 'Unable to authenticate email/password with Stytch.',
+      },
+      statusCode,
+    );
+  }
 }
 
 function handleAuthPreflight(request, env) {

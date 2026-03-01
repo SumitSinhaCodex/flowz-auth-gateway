@@ -146,6 +146,34 @@ export function buildStytchAuthenticateRequest(sessionToken, env) {
   };
 }
 
+export function buildStytchPasswordAuthenticateRequest(email, password, env) {
+  const projectId = (env.STYTCH_PROJECT_ID || '').trim();
+  const secret = (env.STYTCH_SECRET || '').trim();
+  if (!projectId || !secret) {
+    throw new Error('STYTCH_PROJECT_ID and STYTCH_SECRET must be configured.');
+  }
+
+  const apiBase = (env.STYTCH_API_BASE || DEFAULT_STYTCH_API_BASE).replace(/\/$/, '');
+  const credentials = `${projectId}:${secret}`;
+  const encodedCredentials = toBase64(credentials);
+
+  return {
+    url: `${apiBase}/v1/passwords/authenticate`,
+    init: {
+      method: 'POST',
+      headers: {
+        authorization: `Basic ${encodedCredentials}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        email,
+        password,
+        session_duration_minutes: 60,
+      }),
+    },
+  };
+}
+
 export async function authenticateSessionWithStytch(sessionToken, env, fetchImpl = fetch) {
   const { url, init } = buildStytchAuthenticateRequest(sessionToken, env);
   const response = await fetchImpl(url, init);
@@ -180,13 +208,52 @@ export async function authenticateSessionWithStytch(sessionToken, env, fetchImpl
   };
 }
 
-export function renderLoginPage({ returnTo, appOrigin, authDomain, publicToken, projectId }) {
+export async function authenticateEmailPasswordWithStytch(email, password, env, fetchImpl = fetch) {
+  const { url, init } = buildStytchPasswordAuthenticateRequest(email, password, env);
+  const response = await fetchImpl(url, init);
+  const rawText = await response.text();
+
+  let payload = {};
+  if (rawText.trim()) {
+    try {
+      payload = JSON.parse(rawText);
+    } catch {
+      payload = {};
+    }
+  }
+
+  if (!response.ok) {
+    const errorMessage =
+      payload.error_message ||
+      payload.error ||
+      payload.message ||
+      `Stytch password authenticate failed with status ${response.status}.`;
+    const error = new Error(errorMessage);
+    error.statusCode = response.status;
+    error.responseBody = rawText;
+    throw error;
+  }
+
+  return payload;
+}
+
+export function renderLoginPage({ returnTo, appOrigin, authDomain, publicToken }) {
+  const normalizedAuthDomain = normalizeAuthDomain(authDomain);
+  const googleStartUrl = buildGoogleStartUrl({
+    returnTo,
+    authDomain: normalizedAuthDomain,
+    publicToken,
+  });
+  const emailPasswordAction = buildEmailPasswordAction({
+    returnTo,
+    appOrigin,
+  });
+
   const safe = {
     returnTo: escapeHtml(returnTo),
     appOrigin: escapeHtml(appOrigin),
-    authDomain: escapeHtml(normalizeAuthDomain(authDomain)),
-    publicToken: escapeHtml(publicToken),
-    projectId: escapeHtml(projectId || ''),
+    googleStartUrl: escapeHtml(googleStartUrl),
+    emailPasswordAction: escapeHtml(emailPasswordAction),
   };
 
   return `<!doctype html>
@@ -233,6 +300,7 @@ export function renderLoginPage({ returnTo, appOrigin, authDomain, publicToken, 
         margin: 0 0 20px;
         color: var(--muted);
       }
+      .btn,
       button,
       input {
         width: 100%;
@@ -242,7 +310,11 @@ export function renderLoginPage({ returnTo, appOrigin, authDomain, publicToken, 
         padding: 12px;
         box-sizing: border-box;
       }
+      .btn,
       button {
+        display: inline-block;
+        text-decoration: none;
+        text-align: center;
         border: none;
         background: var(--primary);
         color: #fff;
@@ -270,12 +342,6 @@ export function renderLoginPage({ returnTo, appOrigin, authDomain, publicToken, 
       }
       .sep::before { margin-right: 8px; }
       .sep::after { margin-left: 8px; }
-      .error {
-        color: var(--danger);
-        font-size: 14px;
-        min-height: 20px;
-        margin-top: 10px;
-      }
       .meta {
         margin-top: 14px;
         color: var(--muted);
@@ -289,111 +355,21 @@ export function renderLoginPage({ returnTo, appOrigin, authDomain, publicToken, 
       <h1>Flowz Login</h1>
       <p>Sign in to continue learning.</p>
 
-      <button id="google-btn" type="button">Continue with Google</button>
+      <a class="btn" href="${safe.googleStartUrl}">Continue with Google</a>
 
       <div class="sep">or</div>
 
-      <form id="email-form">
-        <input id="email" name="email" type="email" autocomplete="email" placeholder="Email" required />
+      <form method="POST" action="${safe.emailPasswordAction}">
+        <input name="email" type="email" autocomplete="email" placeholder="Email" required />
         <div class="row"></div>
-        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Password" required />
+        <input name="password" type="password" autocomplete="current-password" placeholder="Password" required />
         <div class="row"></div>
         <button type="submit" class="secondary">Sign in</button>
       </form>
 
-      <div class="error" id="error"></div>
-
       <div class="meta">return_to: ${safe.returnTo}</div>
       <div class="meta">app_origin: ${safe.appOrigin}</div>
     </main>
-
-    <script>
-      const config = {
-        returnTo: ${JSON.stringify(returnTo)},
-        appOrigin: ${JSON.stringify(appOrigin)},
-        authDomain: ${JSON.stringify(normalizeAuthDomain(authDomain))},
-        publicToken: ${JSON.stringify(publicToken)},
-        projectId: ${JSON.stringify(projectId || '')},
-      };
-
-      const errorNode = document.getElementById('error');
-      const googleBtn = document.getElementById('google-btn');
-      const emailForm = document.getElementById('email-form');
-
-      function setError(message) {
-        errorNode.textContent = message || '';
-      }
-
-      function buildStytchBase() {
-        return 'https://' + config.authDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
-      }
-
-      function redirectToCallbackWithToken(tokenType, token) {
-        const callback = new URL(config.returnTo);
-        callback.searchParams.set('stytch_token_type', tokenType);
-        callback.searchParams.set('token', token);
-        window.location.assign(callback.toString());
-      }
-
-      googleBtn.addEventListener('click', () => {
-        setError('');
-        const base = buildStytchBase();
-        const start = new URL(base + '/v1/public/oauth/google/start');
-        start.searchParams.set('public_token', config.publicToken);
-        start.searchParams.set('login_redirect_url', config.returnTo);
-        start.searchParams.set('signup_redirect_url', config.returnTo);
-        if (config.projectId) {
-          start.searchParams.set('project_id', config.projectId);
-        }
-        window.location.assign(start.toString());
-      });
-
-      emailForm.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        setError('');
-        const email = document.getElementById('email').value.trim();
-        const password = document.getElementById('password').value;
-        if (!email || !password) {
-          setError('Email and password are required.');
-          return;
-        }
-
-        const base = buildStytchBase();
-        const endpoint = base + '/v1/public/passwords/authenticate';
-        const body = {
-          public_token: config.publicToken,
-          email,
-          password,
-          session_duration_minutes: 60,
-        };
-        if (config.projectId) {
-          body.project_id = config.projectId;
-        }
-
-        try {
-          const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(body),
-          });
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            throw new Error(payload.error_message || payload.error || ('Sign-in failed (' + response.status + ').'));
-          }
-          const token =
-            payload.session_token ||
-            payload.session_jwt ||
-            payload.session?.session_token ||
-            payload.session?.session_jwt;
-          if (!token) {
-            throw new Error('Stytch response did not include a session token.');
-          }
-          redirectToCallbackWithToken('session', token);
-        } catch (error) {
-          setError(error?.message || 'Could not sign in.');
-        }
-      });
-    </script>
   </body>
 </html>`;
 }
@@ -420,4 +396,19 @@ function toBase64(value) {
     return btoa(value);
   }
   return Buffer.from(value, 'utf8').toString('base64');
+}
+
+function buildGoogleStartUrl({ returnTo, authDomain, publicToken }) {
+  const url = new URL(`https://${normalizeAuthDomain(authDomain)}/v1/public/oauth/google/start`);
+  url.searchParams.set('public_token', publicToken);
+  url.searchParams.set('login_redirect_url', returnTo);
+  url.searchParams.set('signup_redirect_url', returnTo);
+  return url.toString();
+}
+
+function buildEmailPasswordAction({ returnTo, appOrigin }) {
+  const params = new URLSearchParams();
+  params.set('return_to', returnTo);
+  params.set('app_origin', appOrigin);
+  return `/auth/email_password?${params.toString()}`;
 }

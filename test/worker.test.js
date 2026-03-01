@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import worker from '../src/index.js';
 
 import {
   authenticateSessionWithStytch,
@@ -106,4 +107,100 @@ test('request helper composes expected URL and body', () => {
   const request = buildStytchAuthenticateRequest('token-1', baseEnv);
   assert.equal(request.url, 'https://test.stytch.com/v1/sessions/authenticate');
   assert.deepEqual(JSON.parse(request.init.body), { session_token: 'token-1' });
+});
+
+test('GET /login contains no-script controls for google + email/password', async () => {
+  const request = new Request(
+    'https://flowz-auth-gateway.sinhasmt16.workers.dev/login?return_to=http%3A%2F%2Flocalhost%3A5173%2Fauth%2Fcallback&app_origin=http%3A%2F%2Flocalhost%3A5173',
+    { method: 'GET' },
+  );
+  const response = await worker.fetch(request, {
+    ...baseEnv,
+    STYTCH_AUTH_DOMAIN: 'flowzlogin-test.sinhasumit.com',
+    STYTCH_PUBLIC_TOKEN: 'public-token-test-123',
+  });
+
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.equal(html.includes('/v1/public/oauth/google/start'), true);
+  assert.equal(html.includes('action="/auth/email_password?'), true);
+  assert.equal(html.toLowerCase().includes('<script'), false);
+});
+
+test('POST /auth/email_password missing fields returns 400', async () => {
+  const request = new Request(
+    'https://flowz-auth-gateway.sinhasmt16.workers.dev/auth/email_password?return_to=http%3A%2F%2Flocalhost%3A5173%2Fauth%2Fcallback&app_origin=http%3A%2F%2Flocalhost%3A5173',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email: 'learner@example.com' }).toString(),
+    },
+  );
+
+  const response = await worker.fetch(request, baseEnv);
+  const payload = await response.json();
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, 'missing_email_or_password');
+});
+
+test('POST /auth/email_password origin not allowed returns 400', async () => {
+  const request = new Request(
+    'https://flowz-auth-gateway.sinhasmt16.workers.dev/auth/email_password?return_to=https%3A%2F%2Fevil.example.com%2Fauth%2Fcallback&app_origin=https%3A%2F%2Fevil.example.com',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'learner@example.com',
+        password: 'password123',
+      }).toString(),
+    },
+  );
+
+  const response = await worker.fetch(request, baseEnv);
+  const payload = await response.json();
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, 'origin_not_allowed');
+});
+
+test('POST /auth/email_password success returns 302 with return_to + token params', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, 'https://test.stytch.com/v1/passwords/authenticate');
+    assert.equal(init.method, 'POST');
+    assert.equal(init.headers['content-type'], 'application/json');
+    return new Response(
+      JSON.stringify({
+        session_token: 'stytch-session-abc',
+      }),
+      {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      },
+    );
+  };
+
+  try {
+    const request = new Request(
+      'https://flowz-auth-gateway.sinhasmt16.workers.dev/auth/email_password?return_to=http%3A%2F%2Flocalhost%3A5173%2Fauth%2Fcallback%3Fredirect%3D%252Fstreams&app_origin=http%3A%2F%2Flocalhost%3A5173',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          email: 'learner@example.com',
+          password: 'password123',
+        }).toString(),
+      },
+    );
+
+    const response = await worker.fetch(request, baseEnv);
+    assert.equal(response.status, 302);
+
+    const location = response.headers.get('location');
+    assert.ok(location);
+    assert.equal(location.includes('http://localhost:5173/auth/callback?redirect=%2Fstreams'), true);
+    assert.equal(location.includes('stytch_token_type=password'), true);
+    assert.equal(location.includes('token=stytch-session-abc'), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

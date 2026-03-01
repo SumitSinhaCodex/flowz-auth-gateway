@@ -7,8 +7,14 @@ Cloudflare Worker for hosted Learner App auth.
 - `GET /health`
   - Returns `200` JSON: `{ "ok": true, "service": "flowz-auth-gateway" }`
 - `GET /login?return_to=...&app_origin=...`
-  - Returns hosted login HTML (Google + email/password).
+  - Returns hosted login HTML (Google + email/password) with no client-side JavaScript required.
   - Validates `return_to` origin against `ALLOWED_ORIGINS` or `DEFAULT_RETURN_TO` origin.
+- `POST /auth/email_password?return_to=...&app_origin=...`
+  - Accepts `application/x-www-form-urlencoded` fields: `email`, `password`.
+  - Calls Stytch `POST /v1/passwords/authenticate` using worker-side Basic auth.
+  - Redirects (`302`) back to `return_to` with:
+    - `stytch_token_type=password`
+    - `token=<session_token>`
 - `POST /auth/stytch/session/authenticate`
   - Accepts `{ "session_token": "..." }`.
   - Calls Stytch server API `POST /v1/sessions/authenticate` with Basic auth.
@@ -49,6 +55,23 @@ Run worker locally:
 ```bash
 npx wrangler dev
 ```
+
+## Quick Smoke Check (No-JS Hosted Login)
+
+1. Verify health:
+```bash
+curl -sS -i 'https://flowz-auth-gateway.sinhasmt16.workers.dev/health'
+```
+Expected: `HTTP 200` JSON body.
+
+2. Verify hosted login HTML has no script dependency:
+```bash
+curl -sS 'https://flowz-auth-gateway.sinhasmt16.workers.dev/login?return_to=http%3A%2F%2Flocalhost%3A5173%2Fauth%2Fcallback&app_origin=http%3A%2F%2Flocalhost%3A5173' | head -n 60
+```
+Expected: HTML with:
+- Google `<a .../v1/public/oauth/google/start...>`
+- Email/password `<form method="POST" action="/auth/email_password?...">`
+- No `<script` block.
 
 ## Deploy with Wrangler
 
