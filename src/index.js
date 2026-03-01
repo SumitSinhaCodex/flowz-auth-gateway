@@ -7,6 +7,8 @@ import {
   normalizeAuthDomain,
   renderLoginPage,
   resolveLoginContext,
+  STYTCH_CREDENTIALS_INVALID_MESSAGE,
+  validateStytchCredentials,
 } from './lib.js';
 
 export default {
@@ -84,11 +86,9 @@ async function handleEmailPasswordAuthenticate(request, env) {
   if (!context.ok) {
     return jsonResponse({ error: context.code, message: context.message }, context.status);
   }
-  if (!env.STYTCH_PROJECT_ID || !env.STYTCH_SECRET) {
-    return new Response(JSON.stringify({ error: 'misconfigured_worker' }), {
-      status: 500,
-      headers: { 'content-type': 'application/json; charset=utf-8' },
-    });
+  const credentials = validateStytchCredentials(env);
+  if (!credentials.isValid) {
+    return misconfiguredStytchCredentialsResponse();
   }
 
   let formData;
@@ -173,14 +173,9 @@ async function handleAuthenticate(request, env) {
   if (origin && !cors) {
     return jsonResponse({ error: 'origin_not_allowed' }, 403);
   }
-  if (!env.STYTCH_PROJECT_ID || !env.STYTCH_SECRET) {
-    return new Response(JSON.stringify({ error: 'misconfigured_worker' }), {
-      status: 500,
-      headers: {
-        'content-type': 'application/json; charset=utf-8',
-        ...(cors || {}),
-      },
-    });
+  const credentials = validateStytchCredentials(env);
+  if (!credentials.isValid) {
+    return misconfiguredStytchCredentialsResponse(cors || {});
   }
 
   const clientIp = request.headers.get('cf-connecting-ip') || 'unknown';
@@ -233,14 +228,9 @@ async function handleOauthAuthenticate(request, env) {
   if (origin && !cors) {
     return jsonResponse({ error: 'origin_not_allowed' }, 400);
   }
-  if (!env.STYTCH_PROJECT_ID || !env.STYTCH_SECRET) {
-    return new Response(JSON.stringify({ error: 'misconfigured_worker' }), {
-      status: 500,
-      headers: {
-        'content-type': 'application/json; charset=utf-8',
-        ...(cors || {}),
-      },
-    });
+  const credentials = validateStytchCredentials(env);
+  if (!credentials.isValid) {
+    return misconfiguredStytchCredentialsResponse(cors || {});
   }
 
   let body;
@@ -272,6 +262,17 @@ async function handleOauthAuthenticate(request, env) {
       cors || {},
     );
   }
+}
+
+function misconfiguredStytchCredentialsResponse(headers = {}) {
+  return jsonResponse(
+    {
+      error: 'misconfigured_worker',
+      message: STYTCH_CREDENTIALS_INVALID_MESSAGE,
+    },
+    500,
+    headers,
+  );
 }
 
 async function enforceRateLimit(ip, env) {

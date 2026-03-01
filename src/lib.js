@@ -1,4 +1,6 @@
 const DEFAULT_STYTCH_API_BASE = 'https://test.stytch.com';
+export const STYTCH_CREDENTIALS_INVALID_MESSAGE =
+  'STYTCH_PROJECT_ID/SECRET invalid. Ensure you set Stytch Project credentials, not M2M/Connected App.';
 
 export function jsonResponse(payload, status = 200, headers = {}) {
   return new Response(JSON.stringify(payload), {
@@ -123,49 +125,26 @@ export function buildCorsHeaders(origin, env) {
 }
 
 export function buildStytchAuthenticateRequest(sessionToken, env) {
-  const apiBase = (env.STYTCH_API_BASE || DEFAULT_STYTCH_API_BASE).replace(/\/$/, '');
-  const authorization = buildStytchAuthorizationHeader(env);
-  console.log({ auth_header_prefix: authorization.split(' ')[0] });
-
-  return {
-    url: `${apiBase}/v1/sessions/authenticate`,
-    init: {
-      method: 'POST',
-      headers: {
-        Authorization: authorization,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ session_token: sessionToken }),
-    },
-  };
+  return buildStytchRequest('/v1/sessions/authenticate', { session_token: sessionToken }, env);
 }
 
 export function buildStytchPasswordAuthenticateRequest(email, password, env) {
-  const apiBase = (env.STYTCH_API_BASE || DEFAULT_STYTCH_API_BASE).replace(/\/$/, '');
-  const authorization = buildStytchAuthorizationHeader(env);
-  console.log({ auth_header_prefix: authorization.split(' ')[0] });
-
-  return {
-    url: `${apiBase}/v1/passwords/authenticate`,
-    init: {
-      method: 'POST',
-      headers: {
-        Authorization: authorization,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        email,
-        password,
-        session_duration_minutes: 60,
-      }),
+  return buildStytchRequest(
+    '/v1/passwords/authenticate',
+    {
+      email,
+      password,
+      session_duration_minutes: 60,
     },
-  };
+    env,
+  );
 }
 
 export async function authenticateSessionWithStytch(sessionToken, env, fetchImpl = fetch) {
-  const { url, init } = buildStytchAuthenticateRequest(sessionToken, env);
+  const { url, init, diagnostics } = buildStytchAuthenticateRequest(sessionToken, env);
   const response = await fetchImpl(url, init);
   const rawText = await response.text();
+  logStytchCallDiagnostics({ ...diagnostics, stytchStatus: response.status });
 
   let payload = {};
   if (rawText.trim()) {
@@ -197,9 +176,10 @@ export async function authenticateSessionWithStytch(sessionToken, env, fetchImpl
 }
 
 export async function authenticateEmailPasswordWithStytch(email, password, env, fetchImpl = fetch) {
-  const { url, init } = buildStytchPasswordAuthenticateRequest(email, password, env);
+  const { url, init, diagnostics } = buildStytchPasswordAuthenticateRequest(email, password, env);
   const response = await fetchImpl(url, init);
   const rawText = await response.text();
+  logStytchCallDiagnostics({ ...diagnostics, stytchStatus: response.status });
 
   let payload = {};
   if (rawText.trim()) {
@@ -226,24 +206,14 @@ export async function authenticateEmailPasswordWithStytch(email, password, env, 
 }
 
 export function buildStytchOauthAuthenticateRequest(oauthToken, sessionDurationMinutes, env) {
-  const apiBase = (env.STYTCH_API_BASE || DEFAULT_STYTCH_API_BASE).replace(/\/$/, '');
-  const authorization = buildStytchAuthorizationHeader(env);
-  console.log({ auth_header_prefix: authorization.split(' ')[0] });
-
-  return {
-    url: `${apiBase}/v1/oauth/authenticate`,
-    init: {
-      method: 'POST',
-      headers: {
-        Authorization: authorization,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        token: oauthToken,
-        session_duration_minutes: sessionDurationMinutes,
-      }),
+  return buildStytchRequest(
+    '/v1/oauth/authenticate',
+    {
+      token: oauthToken,
+      session_duration_minutes: sessionDurationMinutes,
     },
-  };
+    env,
+  );
 }
 
 export async function authenticateOauthWithStytch(
@@ -252,9 +222,10 @@ export async function authenticateOauthWithStytch(
   env,
   fetchImpl = fetch,
 ) {
-  const { url, init } = buildStytchOauthAuthenticateRequest(oauthToken, sessionDurationMinutes, env);
+  const { url, init, diagnostics } = buildStytchOauthAuthenticateRequest(oauthToken, sessionDurationMinutes, env);
   const response = await fetchImpl(url, init);
   const rawText = await response.text();
+  logStytchCallDiagnostics({ ...diagnostics, stytchStatus: response.status });
 
   let payload = {};
   if (rawText.trim()) {
@@ -271,12 +242,6 @@ export async function authenticateOauthWithStytch(
     session_token: payload.session_token || payload.session?.session_token || null,
     expires_at: payload.expires_at || payload.session?.expires_at || null,
   };
-
-  console.log({
-    stytch_path: '/v1/oauth/authenticate',
-    stytch_status: response.status,
-    has_session_token: Boolean(normalized.session_token),
-  });
 
   if (!response.ok) {
     const errorMessage =
@@ -454,15 +419,73 @@ function toBase64(value) {
   return Buffer.from(value, 'utf8').toString('base64');
 }
 
-function buildStytchAuthorizationHeader(env) {
+export function validateStytchCredentials(env) {
   const projectId = (env.STYTCH_PROJECT_ID || '').trim();
   const secret = (env.STYTCH_SECRET || '').trim();
-  if (!projectId || !secret) {
-    throw new Error('STYTCH_PROJECT_ID and STYTCH_SECRET must be configured.');
+  const isValid = Boolean(projectId) && Boolean(secret) && projectId.startsWith('project-');
+  return {
+    projectId,
+    secret,
+    isValid,
+  };
+}
+
+function buildStytchAuthorizationHeader(env) {
+  const credentialState = validateStytchCredentials(env);
+  if (!credentialState.isValid) {
+    throw new Error(STYTCH_CREDENTIALS_INVALID_MESSAGE);
   }
-  const credentials = `${projectId}:${secret}`;
-  const encodedCredentials = toBase64(credentials);
-  return `Basic ${encodedCredentials}`;
+
+  const { projectId, secret } = credentialState;
+  const credentialPair = `${projectId}:${secret}`;
+  return `Basic ${toBase64(credentialPair)}`;
+}
+
+function buildStytchRequest(stytchPath, body, env) {
+  const apiBase = (env.STYTCH_API_BASE || DEFAULT_STYTCH_API_BASE).replace(/\/$/, '');
+  const authorization = buildStytchAuthorizationHeader(env);
+  const { projectId, secret } = validateStytchCredentials(env);
+
+  return {
+    url: `${apiBase}${stytchPath}`,
+    init: {
+      method: 'POST',
+      headers: {
+        Authorization: authorization,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    },
+    diagnostics: {
+      authorization,
+      projectId,
+      secretPresent: secret.length > 10,
+      stytchApiBase: apiBase,
+      stytchPath,
+    },
+  };
+}
+
+function logStytchCallDiagnostics({
+  authorization,
+  projectId,
+  secretPresent,
+  stytchApiBase,
+  stytchPath,
+  stytchStatus,
+}) {
+  console.log(
+    JSON.stringify({
+      auth_header_prefix: authorization.split(' ')[0] || '',
+      project_id_prefix: projectId.slice(0, 12),
+      project_id_has_expected_prefix:
+        projectId.startsWith('project-test-') || projectId.startsWith('project-live-'),
+      secret_present: secretPresent,
+      stytch_api_base: stytchApiBase,
+      stytch_path: stytchPath,
+      stytch_status: stytchStatus,
+    }),
+  );
 }
 
 function buildGoogleStartUrl({ returnTo, authDomain, publicToken }) {

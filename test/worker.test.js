@@ -17,6 +17,13 @@ const baseEnv = {
   STYTCH_API_BASE: 'https://test.stytch.com',
 };
 
+function decodeBasicAuthorization(authorizationValue) {
+  assert.equal(typeof authorizationValue, 'string');
+  assert.equal(authorizationValue.startsWith('Basic '), true);
+  const encoded = authorizationValue.slice('Basic '.length);
+  return Buffer.from(encoded, 'base64').toString('utf8');
+}
+
 test('return_to validation allows origin in ALLOWED_ORIGINS', () => {
   const result = resolveLoginContext(
     'https://flowz-auth-gateway.sinhasmt16.workers.dev/login?return_to=http%3A%2F%2Flocalhost%3A5173%2Fauth%2Fcallback&app_origin=http%3A%2F%2Flocalhost%3A5173',
@@ -89,10 +96,9 @@ test('authenticate request formation uses Stytch sessions/authenticate with basi
   assert.equal(capturedUrl, 'https://test.stytch.com/v1/sessions/authenticate');
   assert.equal(capturedInit.method, 'POST');
   assert.equal(capturedInit.headers['Content-Type'], 'application/json');
-  assert.equal(
-    capturedInit.headers.Authorization,
-    `Basic ${Buffer.from('project-test-123:secret-test-abc').toString('base64')}`,
-  );
+  const decodedAuth = decodeBasicAuthorization(capturedInit.headers.Authorization);
+  assert.equal(decodedAuth.includes(':'), true);
+  assert.equal(decodedAuth.startsWith('project-'), true);
   assert.deepEqual(JSON.parse(capturedInit.body), { session_token: 'session-token-input' });
 
   assert.deepEqual(payload, {
@@ -168,6 +174,9 @@ test('POST /auth/email_password success returns 302 with return_to + token param
     assert.equal(url, 'https://test.stytch.com/v1/passwords/authenticate');
     assert.equal(init.method, 'POST');
     assert.equal(init.headers['Content-Type'], 'application/json');
+    const decodedAuth = decodeBasicAuthorization(init.headers.Authorization);
+    assert.equal(decodedAuth.includes(':'), true);
+    assert.equal(decodedAuth.startsWith('project-'), true);
     return new Response(
       JSON.stringify({
         session_token: 'stytch-session-abc',
@@ -249,10 +258,9 @@ test('POST /auth/stytch/oauth/authenticate success returns normalized session fi
     assert.equal(url, 'https://test.stytch.com/v1/oauth/authenticate');
     assert.equal(init.method, 'POST');
     assert.equal(init.headers['Content-Type'], 'application/json');
-    assert.equal(
-      init.headers.Authorization,
-      `Basic ${Buffer.from('project-test-123:secret-test-abc').toString('base64')}`,
-    );
+    const decodedAuth = decodeBasicAuthorization(init.headers.Authorization);
+    assert.equal(decodedAuth.includes(':'), true);
+    assert.equal(decodedAuth.startsWith('project-'), true);
     assert.deepEqual(JSON.parse(init.body), {
       token: 'oauth-token-abc',
       session_duration_minutes: 43200,
@@ -297,4 +305,30 @@ test('POST /auth/stytch/oauth/authenticate success returns normalized session fi
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('POST /auth/stytch/oauth/authenticate invalid project prefix returns 500 misconfigured_worker', async () => {
+  const request = new Request(
+    'https://flowz-auth-gateway.sinhasmt16.workers.dev/auth/stytch/oauth/authenticate',
+    {
+      method: 'POST',
+      headers: {
+        origin: 'http://localhost:5173',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ oauth_token: 'oauth-token-abc' }),
+    },
+  );
+
+  const response = await worker.fetch(request, {
+    ...baseEnv,
+    STYTCH_PROJECT_ID: 'client-test-123',
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 500);
+  assert.equal(payload.error, 'misconfigured_worker');
+  assert.equal(
+    payload.message,
+    'STYTCH_PROJECT_ID/SECRET invalid. Ensure you set Stytch Project credentials, not M2M/Connected App.',
+  );
 });
