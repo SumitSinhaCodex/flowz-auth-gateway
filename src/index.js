@@ -1,5 +1,6 @@
 import {
   authenticateEmailPasswordWithStytch,
+  authenticateOauthWithStytch,
   authenticateSessionWithStytch,
   buildCorsHeaders,
   jsonResponse,
@@ -30,6 +31,14 @@ export default {
 
     if (url.pathname === '/auth/stytch/session/authenticate' && request.method === 'POST') {
       return handleAuthenticate(request, env);
+    }
+
+    if (url.pathname === '/auth/stytch/oauth/authenticate' && request.method === 'OPTIONS') {
+      return handleAuthPreflight(request, env);
+    }
+
+    if (url.pathname === '/auth/stytch/oauth/authenticate' && request.method === 'POST') {
+      return handleOauthAuthenticate(request, env);
     }
 
     return jsonResponse({ error: 'not_found' }, 404);
@@ -211,6 +220,53 @@ async function handleAuthenticate(request, env) {
       {
         error: 'stytch_authenticate_failed',
         message: error.message || 'Unable to authenticate session token.',
+      },
+      statusCode,
+      cors || {},
+    );
+  }
+}
+
+async function handleOauthAuthenticate(request, env) {
+  const origin = request.headers.get('origin');
+  const cors = origin ? buildCorsHeaders(origin, env) : null;
+  if (origin && !cors) {
+    return jsonResponse({ error: 'origin_not_allowed' }, 400);
+  }
+  if (!env.STYTCH_PROJECT_ID || !env.STYTCH_SECRET) {
+    return new Response(JSON.stringify({ error: 'misconfigured_worker' }), {
+      status: 500,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        ...(cors || {}),
+      },
+    });
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid_json' }, 400, cors || {});
+  }
+
+  const oauthToken = typeof body.oauth_token === 'string' ? body.oauth_token.trim() : '';
+  if (!oauthToken) {
+    return jsonResponse({ error: 'missing_oauth_token' }, 400, cors || {});
+  }
+
+  const requestedDuration = Number(body.session_duration_minutes);
+  const sessionDurationMinutes = Number.isFinite(requestedDuration) && requestedDuration > 0 ? requestedDuration : 43200;
+
+  try {
+    const payload = await authenticateOauthWithStytch(oauthToken, sessionDurationMinutes, env);
+    return jsonResponse(payload, 200, cors || {});
+  } catch (error) {
+    const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 502;
+    return jsonResponse(
+      {
+        error: 'stytch_oauth_authenticate_failed',
+        message: error.message || 'Unable to authenticate oauth token.',
       },
       statusCode,
       cors || {},

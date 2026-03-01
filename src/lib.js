@@ -123,16 +123,8 @@ export function buildCorsHeaders(origin, env) {
 }
 
 export function buildStytchAuthenticateRequest(sessionToken, env) {
-  const projectId = (env.STYTCH_PROJECT_ID || '').trim();
-  const secret = (env.STYTCH_SECRET || '').trim();
-  if (!projectId || !secret) {
-    throw new Error('STYTCH_PROJECT_ID and STYTCH_SECRET must be configured.');
-  }
-
   const apiBase = (env.STYTCH_API_BASE || DEFAULT_STYTCH_API_BASE).replace(/\/$/, '');
-  const credentials = `${projectId}:${secret}`;
-  const encodedCredentials = toBase64(credentials);
-  const authorization = `Basic ${encodedCredentials}`;
+  const authorization = buildStytchAuthorizationHeader(env);
   console.log({ auth_header_prefix: authorization.split(' ')[0] });
 
   return {
@@ -149,16 +141,8 @@ export function buildStytchAuthenticateRequest(sessionToken, env) {
 }
 
 export function buildStytchPasswordAuthenticateRequest(email, password, env) {
-  const projectId = (env.STYTCH_PROJECT_ID || '').trim();
-  const secret = (env.STYTCH_SECRET || '').trim();
-  if (!projectId || !secret) {
-    throw new Error('STYTCH_PROJECT_ID and STYTCH_SECRET must be configured.');
-  }
-
   const apiBase = (env.STYTCH_API_BASE || DEFAULT_STYTCH_API_BASE).replace(/\/$/, '');
-  const credentials = `${projectId}:${secret}`;
-  const encodedCredentials = toBase64(credentials);
-  const authorization = `Basic ${encodedCredentials}`;
+  const authorization = buildStytchAuthorizationHeader(env);
   console.log({ auth_header_prefix: authorization.split(' ')[0] });
 
   return {
@@ -239,6 +223,74 @@ export async function authenticateEmailPasswordWithStytch(email, password, env, 
   }
 
   return payload;
+}
+
+export function buildStytchOauthAuthenticateRequest(oauthToken, sessionDurationMinutes, env) {
+  const apiBase = (env.STYTCH_API_BASE || DEFAULT_STYTCH_API_BASE).replace(/\/$/, '');
+  const authorization = buildStytchAuthorizationHeader(env);
+  console.log({ auth_header_prefix: authorization.split(' ')[0] });
+
+  return {
+    url: `${apiBase}/v1/oauth/authenticate`,
+    init: {
+      method: 'POST',
+      headers: {
+        Authorization: authorization,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        token: oauthToken,
+        session_duration_minutes: sessionDurationMinutes,
+      }),
+    },
+  };
+}
+
+export async function authenticateOauthWithStytch(
+  oauthToken,
+  sessionDurationMinutes = 43200,
+  env,
+  fetchImpl = fetch,
+) {
+  const { url, init } = buildStytchOauthAuthenticateRequest(oauthToken, sessionDurationMinutes, env);
+  const response = await fetchImpl(url, init);
+  const rawText = await response.text();
+
+  let payload = {};
+  if (rawText.trim()) {
+    try {
+      payload = JSON.parse(rawText);
+    } catch {
+      payload = {};
+    }
+  }
+
+  const normalized = {
+    user_id: payload.user_id || payload.user?.user_id || payload.user?.id || payload.session?.user_id || null,
+    session_jwt: payload.session_jwt || payload.session?.session_jwt || null,
+    session_token: payload.session_token || payload.session?.session_token || null,
+    expires_at: payload.expires_at || payload.session?.expires_at || null,
+  };
+
+  console.log({
+    stytch_path: '/v1/oauth/authenticate',
+    stytch_status: response.status,
+    has_session_token: Boolean(normalized.session_token),
+  });
+
+  if (!response.ok) {
+    const errorMessage =
+      payload.error_message ||
+      payload.error ||
+      payload.message ||
+      `Stytch oauth authenticate failed with status ${response.status}.`;
+    const error = new Error(errorMessage);
+    error.statusCode = response.status;
+    error.responseBody = rawText;
+    throw error;
+  }
+
+  return normalized;
 }
 
 export function renderLoginPage({ returnTo, appOrigin, authDomain, publicToken }) {
@@ -400,6 +452,17 @@ function toBase64(value) {
     return btoa(value);
   }
   return Buffer.from(value, 'utf8').toString('base64');
+}
+
+function buildStytchAuthorizationHeader(env) {
+  const projectId = (env.STYTCH_PROJECT_ID || '').trim();
+  const secret = (env.STYTCH_SECRET || '').trim();
+  if (!projectId || !secret) {
+    throw new Error('STYTCH_PROJECT_ID and STYTCH_SECRET must be configured.');
+  }
+  const credentials = `${projectId}:${secret}`;
+  const encodedCredentials = toBase64(credentials);
+  return `Basic ${encodedCredentials}`;
 }
 
 function buildGoogleStartUrl({ returnTo, authDomain, publicToken }) {

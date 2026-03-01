@@ -204,3 +204,97 @@ test('POST /auth/email_password success returns 302 with return_to + token param
     globalThis.fetch = originalFetch;
   }
 });
+
+test('POST /auth/stytch/oauth/authenticate missing oauth_token returns 400', async () => {
+  const request = new Request(
+    'https://flowz-auth-gateway.sinhasmt16.workers.dev/auth/stytch/oauth/authenticate',
+    {
+      method: 'POST',
+      headers: {
+        origin: 'http://localhost:5173',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    },
+  );
+
+  const response = await worker.fetch(request, baseEnv);
+  const payload = await response.json();
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, 'missing_oauth_token');
+});
+
+test('POST /auth/stytch/oauth/authenticate origin not allowed returns 400', async () => {
+  const request = new Request(
+    'https://flowz-auth-gateway.sinhasmt16.workers.dev/auth/stytch/oauth/authenticate',
+    {
+      method: 'POST',
+      headers: {
+        origin: 'https://evil.example.com',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ oauth_token: 'oauth-token-123' }),
+    },
+  );
+
+  const response = await worker.fetch(request, baseEnv);
+  const payload = await response.json();
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, 'origin_not_allowed');
+});
+
+test('POST /auth/stytch/oauth/authenticate success returns normalized session fields', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, 'https://test.stytch.com/v1/oauth/authenticate');
+    assert.equal(init.method, 'POST');
+    assert.equal(init.headers['Content-Type'], 'application/json');
+    assert.equal(
+      init.headers.Authorization,
+      `Basic ${Buffer.from('project-test-123:secret-test-abc').toString('base64')}`,
+    );
+    assert.deepEqual(JSON.parse(init.body), {
+      token: 'oauth-token-abc',
+      session_duration_minutes: 43200,
+    });
+
+    return new Response(
+      JSON.stringify({
+        user_id: 'user-oauth-1',
+        session_token: 'session-from-oauth',
+        session_jwt: 'jwt-from-oauth',
+        expires_at: '2026-03-02T00:00:00Z',
+      }),
+      {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      },
+    );
+  };
+
+  try {
+    const request = new Request(
+      'https://flowz-auth-gateway.sinhasmt16.workers.dev/auth/stytch/oauth/authenticate',
+      {
+        method: 'POST',
+        headers: {
+          origin: 'http://localhost:5173',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ oauth_token: 'oauth-token-abc' }),
+      },
+    );
+
+    const response = await worker.fetch(request, baseEnv);
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(payload, {
+      user_id: 'user-oauth-1',
+      session_token: 'session-from-oauth',
+      session_jwt: 'jwt-from-oauth',
+      expires_at: '2026-03-02T00:00:00Z',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
